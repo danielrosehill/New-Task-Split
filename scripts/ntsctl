@@ -7,6 +7,7 @@
     ntsctl status                                config, model revision, last decisions
     ntsctl update-model [--revision REV]         fetch the newest (or a given) model revision
     ntsctl threshold VALUE                       override the split threshold (`default` resets)
+    ntsctl turns 1|2|3|4|default                 trailing exchanges sent as context (default 4)
     ntsctl uninstall [--keep-logs]               disable and delete venv, model and config
     ntsctl launcher [--remove]                   link the `claudehook` launcher into ~/.local/bin
 
@@ -124,6 +125,7 @@ def main() -> None:
     sub.add_parser("status")
     p = sub.add_parser("update-model"); p.add_argument("--revision", default="main")
     p = sub.add_parser("threshold"); p.add_argument("value")
+    p = sub.add_parser("turns"); p.add_argument("value", choices=["1", "2", "3", "4", "default"])
     p = sub.add_parser("uninstall"); p.add_argument("--keep-logs", action="store_true")
     p = sub.add_parser("launcher"); p.add_argument("--remove", action="store_true")
     a = ap.parse_args()
@@ -170,6 +172,10 @@ def main() -> None:
         cfg["threshold_override"] = None if a.value == "default" else float(a.value)
         save(cfg)
         say(f"Threshold {cfg['threshold']}" + (" (model default)" if a.value == "default" else " (override)"))
+    elif a.cmd == "turns":
+        cfg["turns"] = None if a.value == "default" else int(a.value)
+        save(cfg)
+        say(f"Context: last {cfg['turns'] or 4} exchange(s). Takes effect on the next prompt.")
     elif a.cmd == "uninstall":
         cfg["enabled"] = False
         for d in (C.VENV, C.MODEL_DIR, C.HOME / "model.prev", C.HOME / "model.new"):

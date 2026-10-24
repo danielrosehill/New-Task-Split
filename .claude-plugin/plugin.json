@@ -1,6 +1,6 @@
 {
   "name": "new-task-split",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Auto-/clear when a prompt starts an unrelated task: a local ONNX classifier (no API calls) scores each prompt and splits it into a fresh session.",
   "author": {"name": "Daniel Rosehill", "email": "public@danielrosehill.com", "url": "https://danielrosehill.com"},
   "repository": "https://github.com/danielrosehill/New-Task-Split",

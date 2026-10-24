@@ -11,7 +11,7 @@ MODEL_DIR = HOME / "model"
 CONFIG = HOME / "config.json"
 
 DEFAULT_REPO = "danielrosehill/Agent-Task-Break-Detector-ModernBERT"
-DEFAULTS = {"enabled": False, "mode": "split", "model_repo": DEFAULT_REPO, "model_revision": None, "threshold": None}
+DEFAULTS = {"enabled": False, "mode": "split", "model_repo": DEFAULT_REPO, "model_revision": None, "threshold": None, "turns": None}
 
 
 def load() -> dict:

@@ -19,6 +19,7 @@ git clone https://github.com/danielrosehill/New-Task-Split
 New-Task-Split/scripts/ntsctl launcher      # links ~/.local/bin/claudehook
 claudehook             # Claude Code with auto-split ON for this session only
 claudehook --shadow    # ON, but log only (ntsctl status shows what it would have split)
+claudehook --turns 2   # this session sends only the last 2 exchanges as context
 ```
 
 `claudehook` passes any other arguments through to `claude`. On first run it installs the model, which is left disabled. It then loads
@@ -59,6 +60,7 @@ config says `enabled`.
 | `ntsctl disable` | Off. The venv and model are kept. |
 | `ntsctl status` | Config, model revision, last 10 decisions. |
 | `ntsctl threshold 0.97` / `default` | Raise or lower the bar for a split (higher means fewer splits). |
+| `ntsctl turns 1\|2\|3\|4` / `default` | How many trailing exchanges the model sees (default 4). |
 
 Settings take effect on the next prompt. There is no need to restart. The `toggle` skill wraps these commands.
 
@@ -72,6 +74,20 @@ Per prompt:
 
 - `same: …` keeps the prompt in this session.
 - `new: …` forces a split.
+
+## Context window
+
+The model sees the new prompt plus the last **N exchanges** (one exchange is a prompt and the agent's reply),
+newest first. Each exchange is cut to the last 600 characters of the reply and the first 600 of the
+prompt, and the whole input is capped at 512 tokens, with the oldest exchange dropped first.
+
+N is 1–4 and defaults to 4, which is what the model was trained on.
+
+- Set it with `ntsctl turns N`, or `NEW_TASK_SPLIT_TURNS=N`, or `claudehook --turns N` for one session.
+- A smaller N reacts only to the most recent exchanges.
+- A larger N gives more sense of the session's topic.
+- More than 4 is not offered, because the current model never saw it.
+- Each logged decision records the `turns` it used, so shadow logs from different settings can be compared.
 
 ## What a split looks like
 

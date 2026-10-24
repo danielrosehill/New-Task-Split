@@ -10,6 +10,7 @@ Set up a one-session trial without enabling the hook anywhere else.
 3. Tell the user how to start a trial:
    - `claudehook --shadow` turns the hook on but only logs decisions. Suggest this first.
    - `claudehook` turns it on and splits for real. A split needs tmux or Konsole; anywhere else the prompt goes to the clipboard.
+   - `--turns 1|2|3|4` sets how many trailing exchanges the model sees, for this session only.
    - Any other arguments go through to `claude`.
 4. To review a trial, run `ntsctl status`. It shows the last 10 decisions with `p_new_task`. If it splits too often, raise the threshold with `ntsctl threshold 0.85`; if too rarely, lower it.
 

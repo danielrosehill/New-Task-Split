@@ -38,6 +38,7 @@ RETURN_WINDOW = 30 * 60    # a split prompt re-sent within this many seconds is 
 KEEP_PREFIXES = ("same:", "here:")
 FORCE_PREFIXES = ("new:", "split:")
 MAX_TURNS = 4              # as in training: the last 4 exchanges, newest first
+TURN_CHOICES = (1, 2, 3, 4)  # `ntsctl turns N` / NEW_TASK_SPLIT_TURNS; the model never saw more than 4
 TURN_CHARS = 600           # agent turns in training were short summaries; keep the tail of real ones
 
 
@@ -131,13 +132,22 @@ def read_exchanges(transcript_path: str) -> list[dict]:
 
 # ---------- classifier ----------
 
-def format_context(exchanges: list[dict]) -> str:
+def format_context(exchanges: list[dict], max_turns: int = MAX_TURNS) -> str:
     """Same layout as training (Agent-Context-Harness model/common.py fmt_pair)."""
-    turns = exchanges[-MAX_TURNS:][::-1]
+    turns = exchanges[-max_turns:][::-1]
     return "\n".join(f"AGENT: {t['agent'][-TURN_CHARS:]}\nUSER: {t['user'][:TURN_CHARS]}" for t in turns)
 
 
-def score(message: str, exchanges: list[dict], model_dir: Path) -> float:
+def context_turns(cfg: dict) -> int:
+    """How many trailing exchanges to send: NEW_TASK_SPLIT_TURNS, else config `turns`, else 4."""
+    try:
+        n = int(os.environ.get("NEW_TASK_SPLIT_TURNS") or cfg.get("turns") or MAX_TURNS)
+    except ValueError:
+        return MAX_TURNS
+    return n if n in TURN_CHOICES else MAX_TURNS
+
+
+def score(message: str, exchanges: list[dict], model_dir: Path, max_turns: int = MAX_TURNS) -> float:
     """p(new_task) from the local int8 ONNX model."""
     import numpy as np
     import onnxruntime as ort
@@ -146,7 +156,7 @@ def score(message: str, exchanges: list[dict], model_dir: Path) -> float:
     tok = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
     tok.no_padding()
     tok.enable_truncation(512, strategy="only_second")
-    enc = tok.encode(message, format_context(exchanges))
+    enc = tok.encode(message, format_context(exchanges, max_turns))
     so = ort.SessionOptions()
     so.intra_op_num_threads = int(os.environ.get("NEW_TASK_SPLIT_THREADS", "4"))
     sess = ort.InferenceSession(str(model_dir / "model_int8.onnx"), so, providers=["CPUExecutionProvider"])
@@ -315,15 +325,16 @@ def on_prompt(event: dict, cfg: dict) -> None:
         if len(exchanges) < MIN_PRIOR_PROMPTS:
             sys.exit(0)
         t0 = time.time()
+        turns = context_turns(cfg)
         try:
-            p = score(prompt, exchanges, ntsconfig.MODEL_DIR)
+            p = score(prompt, exchanges, ntsconfig.MODEL_DIR, turns)
         except Exception as e:  # fail open
             log({"session": sid, "decision": "error", "error": f"{type(e).__name__}: {e}"[:300]})
             sys.exit(0)
         threshold = float(os.environ.get("NEW_TASK_SPLIT_THRESHOLD", cfg.get("threshold") or 0.95))
         decision = "new_task" if p >= threshold else "continue"
         log({"session": sid, "hash": h, "preview": stripped[:120], "p_new_task": round(p, 4),
-             "threshold": threshold, "decision": decision, "mode": cfg.get("mode", "split"),
+             "threshold": threshold, "turns": turns, "decision": decision, "mode": cfg.get("mode", "split"),
              "model_revision": cfg.get("model_revision"), "ms": int((time.time() - t0) * 1000)})
         if decision != "new_task" or cfg.get("mode") == "shadow":
             sys.exit(0)
