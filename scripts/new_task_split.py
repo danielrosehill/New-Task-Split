@@ -373,6 +373,11 @@ def main() -> None:
             log({"decision": "dispatch_error", "transport": sys.argv[2], "error": f"{type(e).__name__}: {e}"[:300]})
         return
     cfg = ntsconfig.load()
+    # NEW_TASK_SPLIT=split|shadow enables the hook for this process only (the claudehook launcher),
+    # whatever the config says; NEW_TASK_SPLIT=off is handled per prompt in on_prompt.
+    forced = os.environ.get("NEW_TASK_SPLIT")
+    if forced in ("split", "shadow"):
+        cfg = {**cfg, "enabled": True, "mode": forced}
     if not cfg.get("enabled"):
         return
     event = json.load(sys.stdin)

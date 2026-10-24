@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """ntsctl: install, enable, disable, update and remove the new-task-split hook's local model.
 
-    ntsctl install [--shadow] [--revision REV]   venv + model, then enable
+    ntsctl install [--enable [--shadow]] [--revision REV]   venv + model; stays disabled unless --enable
     ntsctl enable [--shadow | --split]           turn the hook on (shadow = log only, never split)
     ntsctl disable                               turn the hook off (keeps venv and model)
     ntsctl status                                config, model revision, last decisions
     ntsctl update-model [--revision REV]         fetch the newest (or a given) model revision
     ntsctl threshold VALUE                       override the split threshold (`default` resets)
     ntsctl uninstall [--keep-logs]               disable and delete venv, model and config
+    ntsctl launcher [--remove]                   link the `claudehook` launcher into ~/.local/bin
 
 Standard library only, so it runs before the venv exists. The hook itself is registered by the
 plugin (hooks/hooks.json); while disabled or uninstalled it exits at once and changes nothing.
@@ -117,13 +118,14 @@ def save(cfg: dict) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(prog="ntsctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("install"); p.add_argument("--shadow", action="store_true"); p.add_argument("--revision", default="main")
+    p = sub.add_parser("install"); p.add_argument("--enable", action="store_true"); p.add_argument("--shadow", action="store_true"); p.add_argument("--revision", default="main")
     p = sub.add_parser("enable"); g = p.add_mutually_exclusive_group(); g.add_argument("--shadow", action="store_true"); g.add_argument("--split", action="store_true")
     sub.add_parser("disable")
     sub.add_parser("status")
     p = sub.add_parser("update-model"); p.add_argument("--revision", default="main")
     p = sub.add_parser("threshold"); p.add_argument("value")
     p = sub.add_parser("uninstall"); p.add_argument("--keep-logs", action="store_true")
+    p = sub.add_parser("launcher"); p.add_argument("--remove", action="store_true")
     a = ap.parse_args()
     cfg = C.load()
 
@@ -131,9 +133,11 @@ def main() -> None:
         make_venv()
         fetch_model(cfg, a.revision)
         smoke_test()
-        cfg["enabled"], cfg["mode"] = True, "shadow" if a.shadow else "split"
+        cfg["mode"] = "shadow" if a.shadow else "split"
+        cfg["enabled"] = a.enable
         save(cfg)
-        say(f"Enabled in {cfg['mode']} mode, threshold {cfg['threshold']}. Takes effect on the next prompt.")
+        say(f"Enabled in {cfg['mode']} mode, threshold {cfg['threshold']}. Takes effect on the next prompt." if a.enable else
+            f"Installed, threshold {cfg['threshold']}; left disabled. Use `claudehook` for a one-off session, or `ntsctl enable`.")
     elif a.cmd == "enable":
         if not (C.MODEL_DIR / "model_int8.onnx").exists():
             raise SystemExit("Not installed: run `ntsctl install` first.")
@@ -177,8 +181,21 @@ def main() -> None:
             C.HOME.rmdir()
         except OSError:
             pass
+        link = Path.home() / ".local/bin/claudehook"
+        if link.is_symlink():
+            link.unlink()
         say("Removed venv, model and config" + ("" if a.keep_logs else " and logs") +
             ". To remove the hook registration too, uninstall the plugin: /plugin uninstall new-task-split")
+    elif a.cmd == "launcher":
+        link = Path.home() / ".local/bin/claudehook"
+        if a.remove:
+            link.unlink(missing_ok=True)
+            say(f"Removed {link}.")
+        else:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.unlink(missing_ok=True)
+            link.symlink_to(Path(__file__).resolve().parent / "claudehook")
+            say(f"Linked {link}. Run `claudehook` for a Claude session with the hook on (`claudehook --shadow` to log only).")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# claudehook: start Claude Code with new-task-split ON for this session only.
+#   claudehook [--shadow] [claude args...]
+# Loads the plugin with --plugin-dir (no global install needed) and sets NEW_TASK_SPLIT for this
+# process, so normal `claude` sessions are unaffected. Installs the model on first run (disabled).
+set -euo pipefail
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+mode=split
+if [[ "${1:-}" == "--shadow" ]]; then mode=shadow; shift; fi
+home="${NEW_TASK_SPLIT_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/new-task-split}"
+if [[ ! -f "$home/model/model_int8.onnx" ]]; then
+  "$root/scripts/ntsctl" install
+fi
+export NEW_TASK_SPLIT="$mode"
+if claude plugin list 2>/dev/null | grep -q 'new-task-split'; then
+  exec claude "$@"            # plugin already installed: the env var alone turns it on
+fi
+exec claude --plugin-dir "$root" "$@"

@@ -10,7 +10,23 @@ Each prompt is scored locally by a small int8 ONNX cross-encoder,
 [Agent-Task-Break-Detector](https://huggingface.co/datasets/danielrosehill/Agent-Task-Break-Detector) dataset).
 It does no per-turn API calls. The input is the new prompt plus the last 4 exchanges.
 
-## Setup
+## Quick trial: `claudehook` (one session only)
+
+The repo can be used without installing the plugin:
+
+```bash
+git clone https://github.com/danielrosehill/New-Task-Split
+New-Task-Split/scripts/ntsctl launcher      # links ~/.local/bin/claudehook
+claudehook             # Claude Code with auto-split ON for this session only
+claudehook --shadow    # ON, but log only (ntsctl status shows what it would have split)
+```
+
+`claudehook` passes any other arguments through to `claude`. On first run it installs the model, which is left disabled. It then loads
+the plugin with `claude --plugin-dir` and sets `NEW_TASK_SPLIT=split|shadow` for that process alone, so a
+plain `claude` session never runs the hook. If the plugin is already installed, `claudehook` only sets the env var.
+`ntsctl launcher --remove` removes the link.
+
+## Setup (always available)
 
 ```
 /plugin marketplace add danielrosehill/Claude-Code-Plugins
@@ -20,11 +36,13 @@ It does no per-turn API calls. The input is the new prompt plus the last 4 excha
 Then ask Claude to "install new-task-split" (skill `install`), or run the following directly:
 
 ```bash
-~/.claude/plugins/.../new-task-split/scripts/ntsctl install --shadow
+~/.claude/plugins/.../new-task-split/scripts/ntsctl install --enable --shadow
 ```
 
 `install` creates a venv (`onnxruntime`, `tokenizers`, `numpy`; it uses `uv` if present), downloads
-the int8 model (~155 MB, sha256-checked against the Hub), runs a smoke test and enables the hook.
+the int8 model (~155 MB, sha256-checked against the Hub), runs a smoke test. The hook stays **disabled** unless the user passes
+`--enable` (with `--shadow` for log-only mode).
+
 Requirements: Python 3.10+ and Linux or macOS.
 
 The hook is registered as soon as the plugin is installed, but it does nothing until `ntsctl install` has run and the
@@ -45,7 +63,8 @@ Settings take effect on the next prompt. There is no need to restart. The `toggl
 Per session, typed as a whole prompt:
 
 - `split off` / `split on`: pause or resume for this session.
-- `NEW_TASK_SPLIT=off claude`: off for that process.
+- `NEW_TASK_SPLIT=off claude`: off for that process. `NEW_TASK_SPLIT=split` or `shadow` turns it on for that
+  process whatever the config says. This is what `claudehook` sets.
 
 Per prompt:
 
@@ -93,7 +112,9 @@ To remove the hook registration as well, run `/plugin uninstall new-task-split`.
 
 - **Synthetic training data only.** The model has not yet been checked against real sessions.
 - **Run shadow mode first.** Use `ntsctl status` to see what it would have split.
-- **The 0.95 threshold is provisional.** It is pending calibration of the int8 model.
+- **Threshold 0.76** (int8, calibrated 2026-10-24 on the synthetic validation split). On the test split this gives
+  precision 0.94 and recall 0.89. Real-session precision is unknown.
+- **Latency:** about 1.5 s per prompt on CPU, because the model is loaded on every call.
 - **English only.**
 
 ## Licence
