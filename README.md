@@ -24,7 +24,9 @@ claudehook --shadow    # ON, but log only (ntsctl status shows what it would hav
 `claudehook` passes any other arguments through to `claude`. On first run it installs the model, which is left disabled. It then loads
 the plugin with `claude --plugin-dir` and sets `NEW_TASK_SPLIT=split|shadow` for that process alone, so a
 plain `claude` session never runs the hook. If the plugin is already installed, `claudehook` only sets the env var.
-`ntsctl launcher --remove` removes the link.
+`ntsctl launcher --remove` removes the link. Inside Claude Code, the `trial` skill does the same setup.
+
+**Promote** a trial to always on with `ntsctl enable` (or `--shadow`), or the `install` skill. **Demote** with `ntsctl disable`; `claudehook` still works while the hook is disabled.
 
 ## Setup (always available)
 
