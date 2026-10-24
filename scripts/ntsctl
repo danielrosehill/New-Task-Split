@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""ntsctl: install, enable, disable, update and remove the new-task-split hook's local model.
+
+    ntsctl install [--shadow] [--revision REV]   venv + model, then enable
+    ntsctl enable [--shadow | --split]           turn the hook on (shadow = log only, never split)
+    ntsctl disable                               turn the hook off (keeps venv and model)
+    ntsctl status                                config, model revision, last decisions
+    ntsctl update-model [--revision REV]         fetch the newest (or a given) model revision
+    ntsctl threshold VALUE                       override the split threshold (`default` resets)
+    ntsctl uninstall [--keep-logs]               disable and delete venv, model and config
+
+Standard library only, so it runs before the venv exists. The hook itself is registered by the
+plugin (hooks/hooks.json); while disabled or uninstalled it exits at once and changes nothing.
+"""
+import argparse
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ntsconfig as C  # noqa: E402
+
+PACKAGES = ["onnxruntime", "tokenizers", "numpy"]
+FILES = ["onnx/model_int8.onnx", "onnx/tokenizer.json", "new_task_split.json"]
+
+
+def say(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def make_venv() -> None:
+    py = C.VENV / "bin" / "python"
+    uv = shutil.which("uv")
+    if not py.exists():
+        say(f"Creating venv at {C.VENV}")
+        cmd = [uv, "venv", "-q", str(C.VENV)] if uv else [sys.executable, "-m", "venv", str(C.VENV)]
+        subprocess.run(cmd, check=True)
+    say("Installing " + ", ".join(PACKAGES))
+    if uv:
+        subprocess.run([uv, "pip", "install", "-q", "--python", str(py), *PACKAGES], check=True)
+    else:
+        subprocess.run([str(py), "-m", "pip", "install", "-q", *PACKAGES], check=True)
+
+
+def hub_info(repo: str, revision: str) -> dict:
+    url = f"https://huggingface.co/api/models/{repo}/revision/{revision}?blobs=true"
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return json.load(r)
+
+
+def fetch_model(cfg: dict, revision: str = "main") -> bool:
+    """Download the model files at `revision` into model/, verifying LFS sha256. Returns True if
+    the installed model changed. The previous model is kept in model.prev/."""
+    info = hub_info(cfg["model_repo"], revision)
+    sha = info["sha"]
+    if cfg.get("model_revision") == sha and (C.MODEL_DIR / "model_int8.onnx").exists():
+        say(f"Model already at {sha[:7]}.")
+        return False
+    blobs = {s["rfilename"]: s for s in info["siblings"]}
+    missing = [f for f in FILES if f not in blobs]
+    if missing:
+        raise SystemExit(f"{cfg['model_repo']}@{sha[:7]} lacks {missing}")
+    new = C.HOME / "model.new"
+    shutil.rmtree(new, ignore_errors=True)
+    new.mkdir(parents=True)
+    for f in FILES:
+        dest = new / Path(f).name
+        url = f"https://huggingface.co/{cfg['model_repo']}/resolve/{sha}/{f}"
+        say(f"Downloading {f} ({blobs[f].get('size', 0) / 1e6:.1f} MB)")
+        h = hashlib.sha256()
+        with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as out:
+            while chunk := r.read(1 << 20):
+                h.update(chunk)
+                out.write(chunk)
+        want = (blobs[f].get("lfs") or {}).get("sha256")
+        if want and h.hexdigest() != want:
+            shutil.rmtree(new, ignore_errors=True)
+            raise SystemExit(f"sha256 mismatch for {f}: got {h.hexdigest()}, Hub says {want}")
+    meta = json.loads((new / "new_task_split.json").read_text())
+    prev = C.HOME / "model.prev"
+    shutil.rmtree(prev, ignore_errors=True)
+    if C.MODEL_DIR.exists():
+        C.MODEL_DIR.rename(prev)
+    new.rename(C.MODEL_DIR)
+    cfg["model_revision"] = sha
+    cfg["model_threshold"] = meta.get("threshold")
+    say(f"Model {cfg['model_repo']}@{sha[:7]} installed; recommended threshold {meta.get('threshold')}.")
+    return True
+
+
+def effective_threshold(cfg: dict) -> float:
+    return cfg["threshold_override"] if cfg.get("threshold_override") is not None else (cfg.get("model_threshold") or 0.95)
+
+
+def smoke_test() -> None:
+    py = C.VENV / "bin" / "python"
+    code = ("import sys; sys.path.insert(0, %r); import new_task_split as n, ntsconfig as c; "
+            "ex=[{'user':'the payments migration fails on the currency column','agent':'Added a default and re-ran it; it passes.'}]*2; "
+            "print(round(n.score('now backfill the currency column for the old rows', ex, c.MODEL_DIR), 3), "
+            "round(n.score('write me a packing list for a weekend of camping in the rain', ex, c.MODEL_DIR), 3))"
+            % str(Path(__file__).resolve().parent))
+    out = subprocess.run([str(py), "-c", code], capture_output=True, text=True, timeout=120)
+    if out.returncode:
+        raise SystemExit("Smoke test failed:\n" + out.stderr[-2000:])
+    say(f"Smoke test p(new_task): follow-up {out.stdout.split()[0]}, unrelated {out.stdout.split()[1]}")
+
+
+def save(cfg: dict) -> None:
+    cfg["threshold"] = effective_threshold(cfg)
+    C.save(cfg)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="ntsctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("install"); p.add_argument("--shadow", action="store_true"); p.add_argument("--revision", default="main")
+    p = sub.add_parser("enable"); g = p.add_mutually_exclusive_group(); g.add_argument("--shadow", action="store_true"); g.add_argument("--split", action="store_true")
+    sub.add_parser("disable")
+    sub.add_parser("status")
+    p = sub.add_parser("update-model"); p.add_argument("--revision", default="main")
+    p = sub.add_parser("threshold"); p.add_argument("value")
+    p = sub.add_parser("uninstall"); p.add_argument("--keep-logs", action="store_true")
+    a = ap.parse_args()
+    cfg = C.load()
+
+    if a.cmd == "install":
+        make_venv()
+        fetch_model(cfg, a.revision)
+        smoke_test()
+        cfg["enabled"], cfg["mode"] = True, "shadow" if a.shadow else "split"
+        save(cfg)
+        say(f"Enabled in {cfg['mode']} mode, threshold {cfg['threshold']}. Takes effect on the next prompt.")
+    elif a.cmd == "enable":
+        if not (C.MODEL_DIR / "model_int8.onnx").exists():
+            raise SystemExit("Not installed: run `ntsctl install` first.")
+        cfg["enabled"] = True
+        if a.shadow or a.split:
+            cfg["mode"] = "shadow" if a.shadow else "split"
+        save(cfg)
+        say(f"Enabled ({cfg['mode']} mode).")
+    elif a.cmd == "disable":
+        cfg["enabled"] = False
+        save(cfg)
+        say("Disabled. Prompts go through untouched; venv and model are kept.")
+    elif a.cmd == "status":
+        say(json.dumps({**cfg, "home": str(C.HOME), "state": str(C.STATE),
+                        "venv": (C.VENV / "bin" / "python").exists(),
+                        "model_installed": (C.MODEL_DIR / "model_int8.onnx").exists()}, indent=2))
+        try:
+            lines = (C.STATE / "decisions.jsonl").read_text().splitlines()[-10:]
+            say("Last decisions:\n" + "\n".join(lines))
+        except OSError:
+            say("No decisions logged yet.")
+    elif a.cmd == "update-model":
+        if not (C.VENV / "bin" / "python").exists():
+            raise SystemExit("Not installed: run `ntsctl install` first.")
+        if fetch_model(cfg, a.revision):
+            smoke_test()
+        save(cfg)
+        say(f"Threshold now {cfg['threshold']}.")
+    elif a.cmd == "threshold":
+        cfg["threshold_override"] = None if a.value == "default" else float(a.value)
+        save(cfg)
+        say(f"Threshold {cfg['threshold']}" + (" (model default)" if a.value == "default" else " (override)"))
+    elif a.cmd == "uninstall":
+        cfg["enabled"] = False
+        for d in (C.VENV, C.MODEL_DIR, C.HOME / "model.prev", C.HOME / "model.new"):
+            shutil.rmtree(d, ignore_errors=True)
+        C.CONFIG.unlink(missing_ok=True)
+        if not a.keep_logs:
+            shutil.rmtree(C.STATE, ignore_errors=True)
+        try:
+            C.HOME.rmdir()
+        except OSError:
+            pass
+        say("Removed venv, model and config" + ("" if a.keep_logs else " and logs") +
+            ". To remove the hook registration too, uninstall the plugin: /plugin uninstall new-task-split")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/run-hook.sh", "timeout": 15}]}
+    ],
+    "SessionStart": [
+      {"matcher": "clear", "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/run-hook.sh", "timeout": 15}]}
+    ]
+  }
+}
